@@ -1,0 +1,78 @@
+#!/usr/local/php/bin/php
+<?php
+/**
+ * A post-commit hook for SVN.
+ * will automatic update the project after someone commit
+ */
+
+define('PHP_SVNLOOK', '/usr/local/bin/svnlook');
+define('PHP_SVN', '/usr/local/bin/svn');
+
+$projectDirectory = $_SERVER['argv'][1];
+$repos    = $_SERVER['argv'][2];
+$revision = $_SERVER['argv'][3];
+$group    = $_SERVER['argv'][4];
+
+logLine("------------------------S-$repos-$revision--------------------------");
+
+// Get the author of theis revision
+$command = PHP_SVNLOOK . ' author ' . $repos . ' ' . $revision;
+$handle   = execCommand($command);
+$contents = stream_get_contents($handle);
+$author = trim($contents);
+logLine($author);
+
+// Get list of files in this revision
+$command  = PHP_SVNLOOK . ' changed ' . $repos . ' ' . $revision;
+$handle   = execCommand($command);
+$contents = stream_get_contents($handle);
+
+// Drop the four characters representing the action which precede the path on each line
+$contents = preg_replace('/^.{4}/m', null, $contents);
+
+foreach (preg_split("/\v|\n/", $contents, -1, PREG_SPLIT_NO_EMPTY) as $path) {
+    // No need to process folders as each changed file is checked.
+    if (substr($path, -1) === '/') {
+        $isFolder = true;
+    }
+    
+    //remove the "live" if the path have it
+    $pathArray = explode('/', $path);
+    if($pathArray['0'] == 'live'){
+	unset($pathArray['0']);
+    }
+    $path = implode('/', $pathArray);
+    
+    $fileAbsolutePath = $projectDirectory . DIRECTORY_SEPARATOR . $path;
+    $handle = execCommand(PHP_SVN . " up " . $fileAbsolutePath);
+    
+    // Change the file permission
+    $handle = execCommand("chown -R $author:$group $fileAbsolutePath; chmod -R 775 $fileAbsolutePath");
+    
+    // Change SVN directory permission
+    $pathinfo = pathinfo($fileAbsolutePath);
+    $dirName  = $pathinfo['dirname'];
+    $svnDir   = $dirName . DIRECTORY_SEPARATOR . ".svn";
+    if(file_exists($svnDir)){
+        $handle = execCommand("chown -R $author:$group $svnDir; chmod -R 775 $svnDir");
+    }
+}
+
+logLine("------------------------E-$repos-$revision--------------------------".PHP_EOL);
+
+function execCommand($command){
+    logLine($command);
+    $handle  = popen($command, 'r');
+    if ($handle === false) {
+        echo 'ERROR: Could not execute "'.$command.'"'.PHP_EOL.PHP_EOL;
+        exit(2);
+    }
+    return $handle;
+}
+
+function logLine($msg) {
+    $handle = fopen("/var/log/svn-update-post-commit.log", "a");
+    fwrite($handle, date("Y-m-d H:i:s") . ": $msg" . PHP_EOL);
+    fclose($handle);
+}
+
